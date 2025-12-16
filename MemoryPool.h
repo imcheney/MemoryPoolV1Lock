@@ -1,4 +1,6 @@
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <new>
 #include <utility>
@@ -41,6 +43,33 @@ private:
     Slot* endSlot_;  // one-past-the-end slot marker for the current block
     std::mutex mutexForFreeList_;  // mutex for free list
     std::mutex mutexForBlock_;  // mutex for block allocation
+};
+
+class LockFreeMemoryPool
+{
+public:
+    LockFreeMemoryPool(size_t BlockSize = 4096);
+    ~LockFreeMemoryPool();
+
+    void init(size_t);
+
+    void* allocate();
+    void deallocate(void*);
+
+private:
+    void allocateNewBlock();
+    size_t padPointer(char* p, size_t align);
+    bool pushFreeList(Slot* slot);
+    Slot* popFreeList();
+
+    std::size_t BlockSize_;
+    std::size_t SlotSize_;
+    std::size_t slotAdvance_;
+    Slot* firstBlock_;
+    Slot* curSlot_;
+    std::atomic<Slot*> freeList_;
+    Slot* endSlot_;
+    std::mutex mutexForBlock_;
 };
 
 class HashBucket
@@ -111,6 +140,55 @@ T* newElement(Args&&... args)
     return p;
 }
 
+class LockFreeHashBucket
+{
+public:
+    static void initMemoryPool();
+    static LockFreeMemoryPool& getMemoryPool(int index);
+    static void ensureInitialized();
+
+    static void* useMemory(size_t size)
+    {
+        ensureInitialized();
+
+        if (size <= 0)
+        {
+            return nullptr;
+        }
+
+        if (size > MAX_SLOT_SIZE)
+        {
+            return operator new(size);
+        }
+
+        return getMemoryPool((size + 7) / SLOT_BASE_SIZE - 1).allocate();
+    }
+
+    static void freeMemory(void* ptr, size_t size)
+    {
+        ensureInitialized();
+
+        if (!ptr)
+        {
+            return;
+        }
+
+        if (size > MAX_SLOT_SIZE)
+        {
+            operator delete(ptr);
+            return;
+        }
+
+        getMemoryPool((size + 7) / SLOT_BASE_SIZE - 1).deallocate(ptr);
+    }
+
+    template<typename T, typename... Args>
+    friend T* newElementLockFree(Args&&... args);
+
+    template<typename T>
+    friend void deleteElementLockFree(T* p);
+};
+
 template<typename T>
 void deleteElement(T* p)
 {
@@ -118,6 +196,27 @@ void deleteElement(T* p)
     {
         p->~T();  // call destructor
         HashBucket::freeMemory(reinterpret_cast<void*>(p), sizeof(T));
+    }
+}
+
+template<typename T, typename... Args>
+T* newElementLockFree(Args&&... args)
+{
+    T* p = nullptr;
+    if ((p = reinterpret_cast<T*>(LockFreeHashBucket::useMemory(sizeof(T)))) != nullptr)
+    {
+        new (p) T(std::forward<Args>(args)...);
+    }
+    return p;
+}
+
+template<typename T>
+void deleteElementLockFree(T* p)
+{
+    if (p != nullptr)
+    {
+        p->~T();
+        LockFreeHashBucket::freeMemory(reinterpret_cast<void*>(p), sizeof(T));
     }
 }
 

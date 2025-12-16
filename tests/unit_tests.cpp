@@ -31,6 +31,7 @@ struct alignas(32) AlignedPayload
 int main()
 {
     HashBucket::ensureInitialized();
+    LockFreeHashBucket::ensureInitialized();
 
     // basic reuse behaviour：空闲链表应复用 slot
     void* slotA = HashBucket::useMemory(8);
@@ -62,6 +63,32 @@ int main()
     auto alignedAddr = reinterpret_cast<std::uintptr_t>(aligned);
     assert(alignedAddr % alignof(AlignedPayload) == 0);
     deleteElement(aligned);
+
+    // lock-free pool should mirror the locking variant's semantics
+    void* lfSlotA = LockFreeHashBucket::useMemory(8);
+    void* lfSlotB = LockFreeHashBucket::useMemory(8);
+    assert(lfSlotA != nullptr && lfSlotB != nullptr);
+    LockFreeHashBucket::freeMemory(lfSlotA, 8);
+    void* lfSlotC = LockFreeHashBucket::useMemory(8);
+    assert(lfSlotC == lfSlotA);
+    LockFreeHashBucket::freeMemory(lfSlotB, 8);
+    LockFreeHashBucket::freeMemory(lfSlotC, 8);
+
+    Counted::liveCount.store(0, std::memory_order_relaxed);
+    Counted* countedLF = newElementLockFree<Counted>();
+    assert(countedLF != nullptr);
+    assert(Counted::liveCount.load(std::memory_order_relaxed) == 1);
+    deleteElementLockFree(countedLF);
+    assert(Counted::liveCount.load(std::memory_order_relaxed) == 0);
+
+    void* bigBlockLF = LockFreeHashBucket::useMemory(MAX_SLOT_SIZE + 256);
+    assert(bigBlockLF != nullptr);
+    LockFreeHashBucket::freeMemory(bigBlockLF, MAX_SLOT_SIZE + 256);
+
+    AlignedPayload* alignedLF = newElementLockFree<AlignedPayload>();
+    auto alignedLFAddr = reinterpret_cast<std::uintptr_t>(alignedLF);
+    assert(alignedLFAddr % alignof(AlignedPayload) == 0);
+    deleteElementLockFree(alignedLF);
 
     std::cout << "All unit tests passed\n";
     return 0;

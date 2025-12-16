@@ -40,6 +40,12 @@ if(MEMORYPOOL_BUILD_TESTS)
     )
     target_link_libraries(memorypool_concurrency_smoke PRIVATE memorypool)
     target_compile_features(memorypool_concurrency_smoke PRIVATE cxx_std_17)
+
+    add_executable(memorypool_concurrency_lockfree
+        tests/concurrency_lockfree.cpp
+    )
+    target_link_libraries(memorypool_concurrency_lockfree PRIVATE memorypool)
+    target_compile_features(memorypool_concurrency_lockfree PRIVATE cxx_std_17)
 endif()
 
 if(MEMORYPOOL_BUILD_BENCHMARKS)

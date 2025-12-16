@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace memorypool;
@@ -32,14 +33,19 @@ void runBenchmark(const std::string& name, Func&& func)
 
 int main()
 {
-    HashBucket::ensureInitialized();  // 确保内存池准备就绪，避免把初始化成本算进测试
+    HashBucket::ensureInitialized();  // 确保锁版本的内存池准备就绪
+    LockFreeHashBucket::ensureInitialized();  // 同样准备好无锁版本
 
-    constexpr std::size_t iterations = 500000;
-    std::vector<BenchPayload*> cache;
-    cache.reserve(iterations);
+    constexpr std::size_t sequentialIterations = 1'000'000;
+    constexpr std::size_t threadCount = 8;
+    constexpr std::size_t iterationsPerThread = 200'000;
 
-    runBenchmark("memory pool", [&]() {
-        for (std::size_t i = 0; i < iterations; ++i)
+    std::cout << "Sequential benchmarks (" << sequentialIterations << " operations)" << std::endl;
+
+    runBenchmark("memory pool (sequential)", [&]() {
+        std::vector<BenchPayload*> cache;
+        cache.reserve(sequentialIterations);
+        for (std::size_t i = 0; i < sequentialIterations; ++i)
         {
             cache.push_back(newElement<BenchPayload>());
         }
@@ -47,11 +53,25 @@ int main()
         {
             deleteElement(ptr);
         }
-        cache.clear();
     });
 
-    runBenchmark("operator new/delete", [&]() {
-        for (std::size_t i = 0; i < iterations; ++i)
+    runBenchmark("lock-free memory pool (sequential)", [&]() {
+        std::vector<BenchPayload*> cache;
+        cache.reserve(sequentialIterations);
+        for (std::size_t i = 0; i < sequentialIterations; ++i)
+        {
+            cache.push_back(newElementLockFree<BenchPayload>());
+        }
+        for (BenchPayload* ptr : cache)
+        {
+            deleteElementLockFree(ptr);
+        }
+    });
+
+    runBenchmark("operator new/delete (sequential)", [&]() {
+        std::vector<BenchPayload*> cache;
+        cache.reserve(sequentialIterations);
+        for (std::size_t i = 0; i < sequentialIterations; ++i)
         {
             cache.push_back(new BenchPayload());
         }
@@ -59,7 +79,81 @@ int main()
         {
             delete ptr;
         }
-        cache.clear();
+    });
+
+    std::cout << "\nConcurrent benchmarks (" << threadCount << " threads x "
+              << iterationsPerThread << " operations)" << std::endl;
+
+    runBenchmark("memory pool (concurrent)", [&]() {
+        std::vector<std::thread> threads;
+        threads.reserve(threadCount);
+        for (std::size_t t = 0; t < threadCount; ++t)
+        {
+            threads.emplace_back([&]() {
+                std::vector<BenchPayload*> local;
+                local.reserve(iterationsPerThread);
+                for (std::size_t i = 0; i < iterationsPerThread; ++i)
+                {
+                    local.push_back(newElement<BenchPayload>());
+                }
+                for (BenchPayload* ptr : local)
+                {
+                    deleteElement(ptr);
+                }
+            });
+        }
+        for (auto& th : threads)
+        {
+            th.join();
+        }
+    });
+
+    runBenchmark("lock-free memory pool (concurrent)", [&]() {
+        std::vector<std::thread> threads;
+        threads.reserve(threadCount);
+        for (std::size_t t = 0; t < threadCount; ++t)
+        {
+            threads.emplace_back([&]() {
+                std::vector<BenchPayload*> local;
+                local.reserve(iterationsPerThread);
+                for (std::size_t i = 0; i < iterationsPerThread; ++i)
+                {
+                    local.push_back(newElementLockFree<BenchPayload>());
+                }
+                for (BenchPayload* ptr : local)
+                {
+                    deleteElementLockFree(ptr);
+                }
+            });
+        }
+        for (auto& th : threads)
+        {
+            th.join();
+        }
+    });
+
+    runBenchmark("operator new/delete (concurrent)", [&]() {
+        std::vector<std::thread> threads;
+        threads.reserve(threadCount);
+        for (std::size_t t = 0; t < threadCount; ++t)
+        {
+            threads.emplace_back([&]() {
+                std::vector<BenchPayload*> local;
+                local.reserve(iterationsPerThread);
+                for (std::size_t i = 0; i < iterationsPerThread; ++i)
+                {
+                    local.push_back(new BenchPayload());
+                }
+                for (BenchPayload* ptr : local)
+                {
+                    delete ptr;
+                }
+            });
+        }
+        for (auto& th : threads)
+        {
+            th.join();
+        }
     });
 
     return 0;
